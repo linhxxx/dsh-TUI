@@ -489,6 +489,12 @@ const hover = (stdin: FakeStdin, col: number, row: number): void => {
   stdin.write(`\x1b[<35;${col};${row}M`)
 }
 
+/** SGR mouse coordinates are display cells; findText reports a JS string
+ *  index, so a line carrying 中文/emoji before the target needs the prefix's
+ *  cell width instead of its code-unit count. */
+const cellColumn = (term: InstanceType<typeof XTerm>, at: { col: number; row: number }): number =>
+  stringWidth((viewportLines(term)[at.row] ?? '').slice(0, at.col))
+
 /** The footer's status row: row 0 without the context bar, row 1 with it. */
 const statusRow = (lines: readonly string[], needle = 'MODELX'): string =>
   lines.find(line => line.includes(needle)) ?? ''
@@ -508,9 +514,10 @@ const rawStatusRow = (term: InstanceType<typeof XTerm>, needle = 'MODELX'): stri
 async function clickText(stdin: FakeStdin, term: InstanceType<typeof XTerm>, needle: string): Promise<boolean> {
   const at = findText(term, needle)
   if (at === null) return false
-  stdin.write(`\x1b[<0;${at.col + 1};${at.row + 1}M`)
+  const col = cellColumn(term, at) + 1
+  stdin.write(`\x1b[<0;${col};${at.row + 1}M`)
   await sleep(30) // 固定窗:pacing 鼠标 press→release 步间
-  stdin.write(`\x1b[<0;${at.col + 1};${at.row + 1}m`)
+  stdin.write(`\x1b[<0;${col};${at.row + 1}m`)
   return true
 }
 
@@ -878,7 +885,7 @@ try {
       const at = findText(rig.term, 'HOVERME')
       check('R9 hover target located', at !== null)
       if (at !== null) {
-        hover(rig.stdin, at.col + 1, at.row + 1)
+        hover(rig.stdin, cellColumn(rig.term, at) + 1, at.row + 1)
         check('R9 hover shows the plugin detail', await settled(() => screenHas(rig.term, 'DETAIL-LINE')))
         hover(rig.stdin, 1, 1)
         check('R9 leaving restores the idle row', await settled(() => !screenHas(rig.term, 'DETAIL-LINE')))

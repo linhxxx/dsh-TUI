@@ -27,7 +27,7 @@ process.env.DSH_TUI_LANG = 'zh'
 // 组 I 断言条上各段的底色（进度条去掉标签后，颜色是唯一表达），必须开色。
 process.env.FORCE_COLOR = '3'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, tooltip, termTest, metrics] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, tooltip, termTest, metrics, { stringWidth }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -35,10 +35,17 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, tooltip, termT
   import('../src/components/Tooltip.js'),
   import('./lib/term-test.mjs'),
   import('../src/screens/StatusMetrics.js'),
+  import('../src/ink/stringWidth.js'),
 ])
 
 const { sleep, settled, screenHas, findText, viewportLines } = termTest
 const { render, AlternateScreen, Box } = ui
+
+/** SGR mouse coordinates are display cells; findText reports a JS string
+ *  index, so a line carrying 中文/emoji before the target needs the prefix's
+ *  cell width instead of its code-unit count. */
+const cellColumn = (term: XTerm, at: { col: number; row: number }): number =>
+  stringWidth((viewportLines(term)[at.row] ?? '').slice(0, at.col))
 
 let failed = 0
 const check = (name: string, ok: boolean, extra = '') => {
@@ -75,7 +82,7 @@ const hover = (stdin: PassThrough, col: number, row: number) =>
 function hoverText(stdin: PassThrough, term: XTerm, needle: string): void {
   const at = findText(term, needle)
   if (at === null) throw new Error(`hover target not found: ${needle}`)
-  hover(stdin, at.col + 1, at.row + 1)
+  hover(stdin, cellColumn(term, at) + 1, at.row + 1)
 }
 
 const { FileSuggestions } = await import('../src/components/FileSuggestions.js')
@@ -527,7 +534,7 @@ try {
   const modeColourSettles = (term: XTerm, name: string, expected: number) =>
     settled(() => {
       const at = findText(term, name)
-      return at !== null && fgAt(term, at.col, at.row) === expected
+      return at !== null && fgAt(term, cellColumn(term, at), at.row) === expected
     })
 
   const openModeRig = async (channel: unknown, backendMode?: ModeSegment) => {
@@ -558,8 +565,9 @@ try {
       const at = findText(term, '自动接受编辑')
       if (at === null) check('K1 点击目标仍在屏', false)
       else {
-        stdin.write('\x1b[<0;' + (at.col + 1) + ';' + (at.row + 1) + 'M')
-        stdin.write('\x1b[<0;' + (at.col + 1) + ';' + (at.row + 1) + 'm')
+        const col = cellColumn(term, at) + 1
+        stdin.write('\x1b[<0;' + col + ';' + (at.row + 1) + 'M')
+        stdin.write('\x1b[<0;' + col + ';' + (at.row + 1) + 'm')
       }
       check('K1 点击模式段调用 onOpen', await settled(() => opened === 1), 'opened=' + opened)
     }
