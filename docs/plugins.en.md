@@ -37,7 +37,7 @@ reference**, not a promise:
 | Tier | Seams |
 | --- | --- |
 | Stable candidate (shape frozen; breaking changes go through a minor-version deprecation warning before removal) | VI settings sections · VIII full-screen scenes · X managed dialogs · XI status line (+ footer fields via `setField`) · XII keyboard shortcuts · XIII entry renderers |
-| Experimental (may still shift with dsh-std / the TUI Profile) | IX decision events · toast notifications (`ctx.tuiToast`, new) · **Side panels (`ctx.tuiPanels`, full panel + compact row, experimental)** |
+| Experimental (may still shift with dsh-std / the TUI Profile) | IX decision events · toast notifications (`ctx.tuiToast`, new) · **Side panels (`ctx.tuiPanels`, full panel + compact row, experimental)** · XV `@`-mention providers (`ctx.tuiMentions`, new) |
 | Upstream-tracked (stability owned by the cordis / dsh mechanisms underneath) | I session events · II official prompt slots · III bundled skills · IV themes · V system-prompt sections · VII profile composition |
 
 **Footer fields (an addition to seam XI)**: `ctx.tuiStatus.setField(key, text,
@@ -85,6 +85,22 @@ Also an experimental public surface:
   ④ keep the body content **unchanged** to hit `React.memo` (strings compare
   by value, so a fresh string with the same content still hits; only changed
   content re-runs formatting and layout, while lexing is cached by content).
+- **`@`-mention providers (experimental, seam XV)**: `ctx.tuiMentions.register({
+  id, title, complete(query, signal) })` adds plugin rows to the composer's `@`
+  completion popup (the same card as workspace files). A row is `{ label,
+  detail?, insertText }`: choosing it replaces the typed `@query` with
+  `insertText` (plain text, one line, ≤200 characters, no `@` mention token of
+  its own), which is never resolved as a path at submit time. Plugin rows merge
+  into the file list by the same fuzzy score (file order is kept, a tie goes to
+  the file), and the card title switches from "files" to "mentions" once one is
+  present; with no provider the popup is unchanged frame for frame. Every query
+  gets its own AbortSignal: typing on aborts the previous call, each call has a
+  300 ms budget, and a timeout or throw costs only that provider's rows; ≤50 rows
+  per provider per query, ≤4 providers per plugin, ≤16 in total; `register`
+  throws on malformed input or an exhausted budget, and the disposer is bound to
+  the activation. Types live at `@deepseek-harness-tui/dsh-tui/extensions` and
+  `./api`; the rule table is seam XV of the
+  [admission & development guide](../tui-profile/docs/plugin-admission-and-development.md).
 - The `@deepseek-harness-tui/dsh-tui/test-utils` subpath and
   `ctx.tuiPluginHost.grants.corrupt` were removed in the adapter layering
   refactor (#705).
@@ -198,8 +214,12 @@ Also an experimental public surface:
   first frames use the auto-detected palette. The root-capability guard is
   the same as under `dsh --profile`: a row activating after the first TUI row
   cannot use `ctx.root` capabilities (`root.plugin`, `root.effect`,
-  `root.on`, …) in its apply. A plugin that waits for something in its apply
-  holds the composition: start long work detached, not awaited. On a scene's
+  `root.on`, …) in its apply. The one exception is the upstream-declared
+  root-owned `invocation` accessor, which the host materializes when it
+  installs the guard so a later official Remote service still constructs; a
+  plugin still cannot call `ctx.root` itself. A plugin that waits for
+  something in its apply holds the composition: start long work detached, not
+  awaited. On a scene's
   `TuiSceneProps.channel`, `ready` is `false` (and `status` `'starting'`)
   while no session stands behind the channel, e.g. after the startup session
   failed to open (`startupFailure`).

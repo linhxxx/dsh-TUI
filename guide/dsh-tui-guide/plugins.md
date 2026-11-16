@@ -32,7 +32,7 @@
 | 分级 | 接缝 |
 | --- | --- |
 | 稳定候选（形态冻结；如有破坏性变更，先在次版本弃用告警再移除） | 六 设置区块 · 八 全屏场景 · 十 托管对话框 · 十一 状态行（+ 底栏字段 `setField`） · 十二 键盘快捷键 · 十三 条目渲染器 |
-| 实验性（仍可能随 dsh-std / TUI Profile 演进调整） | 九 决策事件 · toast 通知（`ctx.tuiToast`，新增） · **侧栏 Panel（`ctx.tuiPanels`，full 面板与 compact 行，实验性）** |
+| 实验性（仍可能随 dsh-std / TUI Profile 演进调整） | 九 决策事件 · toast 通知（`ctx.tuiToast`，新增） · **侧栏 Panel（`ctx.tuiPanels`，full 面板与 compact 行，实验性）** · 十五 `@` 提及提供方（`ctx.tuiMentions`，新增） |
 | 跟随上游（稳定性由 cordis / dsh 官方机制决定） | 一 会话事件 · 二 官方 prompt 槽位 · 三 技能打包 · 四 主题 · 五 system prompt 段 · 七 profile 组合 |
 
 另：
@@ -68,6 +68,17 @@
   偏好**（终端支持图形时走图片），行内公式不走图片、仍排成 Unicode；④ 正文
   内容**保持不变**才能命中 `React.memo`（字符串按值比较，内容相同的新字符串
   一样命中；只有内容变化才重跑格式化与排版，分词按内容缓存）。
+- **`@` 提及提供方（实验性，接缝十五）**：`ctx.tuiMentions.register({ id,
+  title, complete(query, signal) })` 往输入框的 `@` 补全浮窗加插件行（与工作区
+  文件同一张卡）。行是 `{ label, detail?, insertText }`：选中后 `insertText`
+  （纯文本、单行、≤200 字符、不得含 `@` 提及记号）替换敲入的 `@query`，提交时
+  不按路径解析。插件行按与文件同一个模糊分并入（文件顺序不动、平分归文件），
+  出现插件行时卡片标题从「文件」变「提及」；没有提供方时浮窗逐帧不变。每次查询
+  单独一个 AbortSignal：继续打字即 abort 上一次，单次预算 300ms，超时/抛错只丢
+  它自己那份；每提供方每次 ≤50 行，每插件 ≤4 个、全局 ≤16 个；`register` 遇
+  非法输入或超额直接抛错，dispose 随 activation 回收。类型见
+  `@deepseek-harness-tui/dsh-tui/extensions` 与 `./api`，规则表见
+  [准入与开发指南](../tui-profile/docs/plugin-admission-and-development.md)接缝十五。
 - `@deepseek-harness-tui/dsh-tui/test-utils` 子路径与
   `ctx.tuiPluginHost.grants.corrupt` 已随 adapter 分层重构（#705）移除。
 - **后端贡献族（`tui.dsh/v1alpha1` `Backend`，接缝十四）的公开面已随第一版 apiVersion 冻结**：类型面
@@ -135,8 +146,10 @@
   已挂载的界面上（主题、面板、状态视图等实时加入）。用户选定的运行时主题在其插件
   注册后生效，此前的首帧用自动检测的配色。根能力守卫与 `dsh --profile` 一致：在首个
   TUI 行之后激活的行，apply 里不能用 `ctx.root` 的能力（`root.plugin`、
-  `root.effect`、`root.on` 等）。apply 里等待会拖住组合：耗时工作脱离 apply 启动、
-  不要 await。场景的 `TuiSceneProps.channel` 在没有会话撑着时（例如启动会话打开失败，
+  `root.effect`、`root.on` 等）。上游声明为 root 所有的 `invocation` accessor 是唯一例外：
+  宿主在装守卫时先物化它，之后的官方 Remote 服务因此仍能构造；插件自己调用 `ctx.root` 依旧被拒。
+  apply 里等待会拖住组合：耗时工作脱离 apply 启动、不要 await。场景的
+  `TuiSceneProps.channel` 在没有会话撑着时（例如启动会话打开失败，
   见 `startupFailure`）`ready` 为 `false`、`status` 为 `'starting'`。
 - **Claude 与 Codex 内核**（轻量 profile；Claude 已验收，Codex 走同一条组合路径但尚未验收）：入口在首帧之后组合本包的行与 profile 声明的
   第三方 bundle，不含 `@deepseek-ai/dsh-base`，规则同上条。`inject` 里有只由 DSH 核心

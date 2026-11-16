@@ -15,7 +15,7 @@
  * 运行：node scripts/verify-cli-subcommands.mjs（不依赖 lib/ 构建产物）
  */
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -222,6 +222,50 @@ for (const alias of ['version', '--version', '-v']) {
   )
 }
 
+// --- migrate（顶层分发：profile 的 entry/cli 二选一，不委托）--------------------
+{
+  // `migrate` 与 `update` 一样在角色分支之前处理，import 的是 **profile 的**
+  // 编译产物。entry.js 会先装宿主解析（冷 profile 的框架包解析）；旧 profile
+  // 只有 cli.js，它必须继续可用——升级启动器不等于要求先更新 profile。
+  const migrateHome = join(tmp, 'migrate-home')
+  const pkgDir = join(migrateHome, 'profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+  const migrateLib = join(pkgDir, 'lib', 'types', 'dsh-adapter', 'migrate')
+  mkdirSync(migrateLib, { recursive: true })
+  writeFileSync(join(pkgDir, 'package.json'), '{"name":"@deepseek-harness-tui/dsh-tui","version":"9.9.9","type":"module"}')
+  writeFileSync(
+    join(migrateLib, 'cli.js'),
+    'export async function cliMigrate(argv) { console.log(`stub-cli-migrate ${argv.join(",")}`); return 7 }\n',
+  )
+  const legacy = run(['migrate', 'claude-code', '--dry-run'], { DSH_HOME: migrateHome })
+  check(
+    '旧 profile 只有 cli.js 时 migrate 仍直接执行（不要求升级）',
+    legacy.status === 7 && legacy.stdout.includes('stub-cli-migrate claude-code,--dry-run'),
+    `status=${legacy.status}`,
+  )
+  writeFileSync(
+    join(migrateLib, 'entry.js'),
+    'export async function cliMigrate(argv) { console.log(`stub-entry-migrate ${argv.join(",")}`); return 9 }\n',
+  )
+  const withEntry = run(['migrate'], { DSH_HOME: migrateHome })
+  check(
+    '有 entry.js 时 migrate 交给 entry（宿主解析入口）',
+    withEntry.status === 9 && withEntry.stdout.includes('stub-entry-migrate'),
+    `status=${withEntry.status}`,
+  )
+  // 入口存在但加载失败：是依赖/运行问题而不是产物缺失——给净化后的具体原因、
+  // 退出 1，且不再指向 `dsh-tui update`。
+  writeFileSync(join(migrateLib, 'entry.js'), 'throw new Error("stub entry load failure")\n')
+  const broken = run(['migrate'], { DSH_HOME: migrateHome })
+  check(
+    'entry 加载失败时区分于产物缺失（migrate 无法运行 + exit 1）',
+    broken.status === 1
+      && broken.stderr.includes('无法运行')
+      && broken.stderr.includes('stub entry load failure')
+      && !broken.stderr.includes('dsh-tui update'),
+    `status=${broken.status}`,
+  )
+}
+
 // --- 只认第一个参数 ------------------------------------------------------------
 {
   // 独立的全新 DSH_HOME：前面的用例已在 emptyHome 写入 profile 残骸，
@@ -244,6 +288,56 @@ for (const alias of ['version', '--version', '-v']) {
       `status=${r.status}`,
     )
   }
+}
+
+// --- update 子命令：本次 argv 优先于继承的启动器标记 -------------------------
+{
+  // A `!` shell spawned from another install's TUI carries that session's
+  // DSH_TUI_LAUNCHER_*; `dsh-tui update` must pin them to its own argv/version
+  // before cliUpdate runs, or alignGlobalLauncher() rewrites the other install.
+  const updateHome = join(tmp, 'update-home')
+  const updatePkg = join(updateHome, 'profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+  mkdirSync(join(updatePkg, 'lib', 'types'), { recursive: true })
+  writeFileSync(join(updatePkg, 'package.json'), JSON.stringify({
+    name: '@deepseek-harness-tui/dsh-tui',
+    version: '0.0.1',
+    type: 'module',
+  }))
+  writeFileSync(join(updatePkg, 'lib', 'types', 'update.js'), `
+import { writeFileSync } from 'node:fs'
+export async function cliUpdate() {
+  writeFileSync(process.env.UPDATE_ENV_LOG, JSON.stringify({
+    argv1: process.argv[1],
+    path: process.env.DSH_TUI_LAUNCHER_PATH,
+    version: process.env.DSH_TUI_LAUNCHER_VERSION,
+  }))
+  return 0
+}
+`)
+  const updateStub = join(tmp, 'update-stub')
+  mkdirSync(updateStub, { recursive: true })
+  writeFileSync(join(updateStub, 'dsh'), '#!/bin/sh\nexit 0\n')
+  chmodSync(join(updateStub, 'dsh'), 0o755)
+  const envLog = join(tmp, 'update-env.json')
+  const inheritedPath = join(tmp, 'other-install', 'bin', 'dsh-tui.js')
+  const r = run(['update'], {
+    DSH_HOME: updateHome,
+    PATH: updateStub,
+    DSH_TUI_LAUNCHER_PATH: inheritedPath,
+    DSH_TUI_LAUNCHER_VERSION: '0.0.0',
+    UPDATE_ENV_LOG: envLog,
+  })
+  let seen
+  try {
+    seen = JSON.parse(readFileSync(envLog, 'utf8'))
+  } catch {
+    seen = undefined
+  }
+  check(
+    'update: this launcher wins over inherited launcher markers',
+    r.status === 0 && seen?.path === bin && seen?.version === ownVersion && seen?.path !== inheritedPath,
+    `status=${r.status} seen=${JSON.stringify(seen)} stderr=${r.stderr}`,
+  )
 }
 
 rmSync(tmp, { recursive: true, force: true })

@@ -2,7 +2,7 @@
  * Upstream compatibility contract.
  *
  * The TUI is validated against a set of upstream prerelease lines — the
- * current primary (0.2.1-rc.3) plus older lines kept in backward
+ * current primary (0.2.2-rc.3) plus older lines kept in backward
  * compatibility across the 0.2.0, 0.1.7, 0.1.5, 0.1.3, 0.1.2, 0.1.1 and 0.1.0
  * release families.
  * Every official package this adapter touches is blessed here; anything
@@ -13,17 +13,50 @@
  * `upstreamDriftSummary()` collapses the per-package entries into the
  * single natural-language boot notice the logo header shows (see LogoV2).
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ADAPTER_TYPE_PACKAGES, HOST_TYPE_PACKAGES } from './host-contract.js'
+import { ADAPTER_TYPE_PACKAGES, HOST_MODULES, HOST_PACKAGE, HOST_TYPE_PACKAGES } from './host-contract.js'
 
 /** Primary validated upstream line (newest). */
-export const UPSTREAM_VALIDATED_VERSION = '0.2.1-rc.3'
+export const UPSTREAM_VALIDATED_VERSION = '0.2.2-rc.3'
+
+/**
+ * The host CLI package whose installation `/update` aligns with the TUI.
+ * Re-exported here (the literal stays in host-contract.ts) so engine planning
+ * can name it without importing the host-only module.
+ */
+export const UPSTREAM_HOST_PACKAGE = HOST_PACKAGE
+
+const APP_BOOT_MODULE = HOST_MODULES.find(module => module.key === 'appBoot')
+if (APP_BOOT_MODULE === undefined) {
+  // A broken host contract is a build-time fault, not a runtime state: the
+  // gate (verify:contract) fails on the same edit. Name it instead of letting
+  // a bare TypeError crash every boot.
+  throw new Error('host contract: HOST_MODULES has no appBoot entry (run pnpm verify:contract)')
+}
+
+/**
+ * The host-side peer whose enumerated range defines the engine line a TUI
+ * release validates (`@deepseek-ai/dsh-app-boot`, lockstep with the CLI).
+ * Derived from the host contract: the literal lives only in host-contract.ts.
+ */
+export const UPSTREAM_HOST_PEER_PACKAGE = APP_BOOT_MODULE.specifier
 
 /**
  * Explicitly supported upstream prerelease lines, oldest first.
  *
- * 0.2.1-rc.3 = primary continuous-CI line; 0.2.1-rc.2 and
+ * 0.2.2-rc.3 = primary continuous-CI line (a release-train bump: the
+ * published code is identical to rc.2 apart from the web-only
+ * deepseek-chat-import bundle and one Cordis API catalog entry, so the
+ * replica and patch surfaces are unchanged);
+ * 0.2.2-rc.2 = previous 0.2.2 prerelease (AgentTeam moved into dsh-base
+ * with a per-session switch and named subagents, account notifications
+ * replaced the bonus API, DeepSeek Search/Fetch split their settings);
+ * 0.2.2-rc.1 = earlier 0.2.2 prerelease (the model-selection projection,
+ * Agent.model seam and PromptPresentation split land there); 0.2.1-rc.5 =
+ * previous family still source-checked where CI covers it; 0.2.1-rc.4/rc.3/rc.2 = earlier
+ * prereleases of the same family (published code compared with the primary);
  * 0.2.0-rc.2/rc.1 = previous family (mapped compatibility);
  * 0.1.7-rc.2/rc.1 = previous family (mapped compatibility);
  * 0.1.5-rc.1/alpha.2/alpha.1 = mapped
@@ -58,6 +91,11 @@ export const UPSTREAM_VALIDATED_VERSIONS = [
   '0.2.0-rc.2',
   '0.2.1-rc.2',
   '0.2.1-rc.3',
+  '0.2.1-rc.4',
+  '0.2.1-rc.5',
+  '0.2.2-rc.1',
+  '0.2.2-rc.2',
+  '0.2.2-rc.3',
 ] as const
 
 /**
@@ -87,6 +125,7 @@ export const UPSTREAM_BLESSED_PACKAGES = [
   '@deepseek-ai/dsh-persona',
   '@deepseek-ai/dsh-scope',
   '@deepseek-ai/dsh-session',
+  '@deepseek-ai/dsh-session-persistence-jsonl',
   '@deepseek-ai/dsh-settings',
   '@deepseek-ai/dsh-skill',
   '@deepseek-ai/dsh-storage',
@@ -125,6 +164,7 @@ const OPTIONAL_RUNTIME_PACKAGES = new Set<string>([
   '@deepseek-ai/dsh-deepseek-account',
   '@deepseek-ai/dsh-host-webserver',
   '@deepseek-ai/dsh-web-app',
+  '@deepseek-ai/dsh-session-persistence-jsonl',
   // Never resolved from this package at run time: the standalone entry loads
   // them from the installed dsh by realpath (./host-dsh.ts), and a profile
   // has no copy of them (peers are not auto-installed there).
@@ -244,6 +284,23 @@ export function installedKernelVersion(): string | undefined {
     // 宿主包不在解析半径内（孤立测试/源码运行）——落到内核线包。
   }
   return installedUpstreamVersions()['@deepseek-ai/dsh-agent']
+}
+
+/**
+ * 已装宿主（`@deepseek-ai/dsh`）包的真实目录；源码 checkout（宿主不是本包
+ * 依赖）下为 undefined。
+ *
+ * `/update` 只在「本进程启动的宿主」和 PATH 都给不出目录时用它做最后回退：
+ * profile 副本的 `node_modules/@deepseek-ai/dsh` 是模块回退链接，可能指向另一
+ * 个安装（例如旧 npx 缓存，issue #2028），不能当作当前引擎的唯一真源。拿到
+ * 目录后仍由 `src/updateHost.ts` 的 `detectHostInstall` 判定安装布局。
+ */
+export function installedKernelPackageDir(): string | undefined {
+  try {
+    return realpathSync(dirname(fileURLToPath(import.meta.resolve('@deepseek-ai/dsh/package.json'))))
+  } catch {
+    return undefined
+  }
 }
 
 /**

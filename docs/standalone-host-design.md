@@ -130,7 +130,10 @@ Loader 能求值（只转发 `DSH_TUI_BACKEND` 的写法与入口已排的环境
 - **环境变量先于组合**：`cordis.patch.yml` 的 `dsh-tui` 行用 `!!js process.env.X` 读 `DSH_TUI_*`，
   组合时求值，所以入口要在组合前设好；`loadLayeredEnv('dsh')` 会把 `.env` 层写进 `process.env`。
 - **根能力守卫**（`HOST_DEVIATIONS` 的 `defer-root-guard`）：守卫从入口绑定根起，到屏幕挂载期间一直关闭；组合开始后
-  由第一个 TUI 行的激活装上（与 profile 路径一致），没有 TUI 行激活则在组合结算时装上。
+  由第一个 TUI 行的激活装上（与 profile 路径一致），没有 TUI 行激活则在组合结算时装上。装上守卫时宿主
+  一并物化 `dsh-typert-protocol` 声明为 root 所有的 `invocation` accessor（上游在首个 Remote service 构造时
+  把它注册到 root，「跨任何单个 Service 存活」），因此首个 Remote 服务在守卫之后激活也不会因竞态失败；
+  插件自己的 `ctx.root` 调用仍被拒绝。
 
 ### 4.4 进程所有权与退出
 
@@ -180,9 +183,13 @@ Claude 内核不组合 dsh-base 时**写**没有去处。被否的「继续住 C
   内核都交给入口。入口判定为 DSH 而走委托路径时原样交给 `dsh --profile <profile> -- <应用参数>`：
   环境、stdio 与交接 ACK 管道（fd 3）透传，由真正接管屏幕的 dsh 进程发 ACK，入口只转发退出。
 - 入口非零退出且没有 dsh CLI 时，启动器原样退出：安全模式与排查提示都指向不存在的 `dsh --profile`。
-- `restartTui` 默认用 `process.execPath` + 原 argv 重起；启动器给了 `DSH_TUI_HOST_ENTRY_PATH`（且未被
-  `DSH_TUI_HOST_ENTRY=0` 关闭）时，任何内核的替身进程都经入口重起（`restartArgv`，只带 dsh `--`
-  之后的应用参数）。
+- `restartTui` 用 `process.execPath` + 原 argv 重起；普通 `/restart` 与 `/update` 在非 Windows 且支持
+  `process.execve` 的运行时中原地替换，保留 PID 与前台进程链，不累积等待中的 TUI。React 与终端清理、
+  根资源释放必须先完成；内核切换与不支持该 API 的运行时仍用父进程监督的 spawn 交接。
+- 启动器给了 `DSH_TUI_HOST_ENTRY_PATH`（且未被 `DSH_TUI_HOST_ENTRY=0` 关闭）时，经入口重起
+  （`restartArgv`，只带 dsh `--` 之后的应用参数）。例外是入口已委托给 DSH 的启动链：入口在子进程环境
+  标记 `DSH_TUI_HOST_DELEGATED=1`，普通重启直接重放实际 DSH argv，避免反复回入口再增加等待层；
+  `/update` 也保持该路径，直到冷启动或内核切换才重新尝试入口。新的入口启动会清除旧委托标记。
 - 一次性开关（`--version`、`--dump-config*` 等 dsh 前缀参数）继续直接交给 dsh。
 - 关闭开关 `DSH_TUI_HOST_ENTRY=0`：所有内核回到 `dsh --profile`。设置文件（4.5）不随开关回退。
 
